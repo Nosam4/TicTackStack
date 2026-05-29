@@ -21,7 +21,7 @@ This repo deploys with GitHub Actions using:
 - [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml)
 - `base: '/TicTackStack/'` in [`vite.config.js`](./vite.config.js)
 
-## Supabase setup (cloud saves + multiplayer rooms)
+## Supabase setup (multiplayer rooms)
 
 ### 1. Create project + enable anonymous auth
 - Create a Supabase project.
@@ -59,7 +59,6 @@ After setting secrets, push a commit or re-run the deploy workflow.
 5. Device A and B will be assigned `X` and `O`; turns are enforced and moves sync in realtime.
 
 Notes:
-- While inside a room, cloud save actions are disabled to prevent state conflicts.
 - `Reset Room Game` is restricted to Player `X`.
 - Leaving a room removes your slot; empty rooms are cleaned up.
 

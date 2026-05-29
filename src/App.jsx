@@ -163,21 +163,6 @@ function normalizeLoadedState(rawState) {
   }
 }
 
-function buildSaveOptions(saves) {
-  return saves.map((save) => {
-    const updated = save.updated_at ? new Date(save.updated_at) : null
-    const timestamp =
-      updated && !Number.isNaN(updated.getTime())
-        ? updated.toLocaleString()
-        : 'Unknown time'
-
-    return {
-      ...save,
-      label: `${save.name} (${timestamp})`,
-    }
-  })
-}
-
 function buildRoomCode() {
   let code = ''
   for (let index = 0; index < 6; index += 1) {
@@ -305,20 +290,8 @@ function App() {
   const [isDraw, setIsDraw] = useState(false)
   const [message, setMessage] = useState(defaultGameMessage)
 
-  const [saveName, setSaveName] = useState('My Match')
-  const [saves, setSaves] = useState([])
-  const [selectedSaveId, setSelectedSaveId] = useState('')
-  const [cloudMessage, setCloudMessage] = useState(
-    isSupabaseConfigured
-      ? 'Preparing cloud saves...'
-      : 'Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable cloud saves.',
-  )
-  const [isCloudReady, setIsCloudReady] = useState(false)
+  const [isAuthReady, setIsAuthReady] = useState(false)
   const [authUserId, setAuthUserId] = useState(null)
-  const [isSaving, setIsSaving] = useState(false)
-  const [isLoadingSave, setIsLoadingSave] = useState(false)
-  const [isDeletingSave, setIsDeletingSave] = useState(false)
-  const [isFetchingSaves, setIsFetchingSaves] = useState(false)
 
   const [roomCodeInput, setRoomCodeInput] = useState('')
   const [activeRoomId, setActiveRoomId] = useState(null)
@@ -328,13 +301,15 @@ function App() {
   const [roomPlayers, setRoomPlayers] = useState([])
   const [roomUpdatedAt, setRoomUpdatedAt] = useState(null)
   const [roomMessage, setRoomMessage] = useState(
-    'Create a room, then join it from another device using the room code.',
+    isSupabaseConfigured
+      ? 'Create a room, then join it from another device using the room code.'
+      : 'Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable multiplayer.',
   )
   const [isCreatingRoom, setIsCreatingRoom] = useState(false)
   const [isJoiningRoom, setIsJoiningRoom] = useState(false)
   const [isLeavingRoom, setIsLeavingRoom] = useState(false)
 
-  const hasBootstrappedCloudRef = useRef(false)
+  const hasBootstrappedAuthRef = useRef(false)
   const roomChannelRef = useRef(null)
 
   const currentAvailableSize = useMemo(
@@ -369,40 +344,6 @@ function App() {
       isDraw,
       message,
     }
-  }
-
-  async function fetchCloudSaves() {
-    if (!isSupabaseConfigured || !supabase) return []
-
-    setIsFetchingSaves(true)
-
-    const { data, error } = await supabase
-      .from('game_saves')
-      .select('id, name, updated_at')
-      .order('updated_at', { ascending: false })
-
-    setIsFetchingSaves(false)
-
-    if (error) {
-      throw error
-    }
-
-    const normalized = buildSaveOptions(data ?? [])
-    setSaves(normalized)
-
-    if (normalized.length === 0) {
-      setSelectedSaveId('')
-      return normalized
-    }
-
-    setSelectedSaveId((currentValue) => {
-      if (currentValue && normalized.some((save) => save.id === currentValue)) {
-        return currentValue
-      }
-      return normalized[0].id
-    })
-
-    return normalized
   }
 
   const fetchRoomPlayers = useCallback(async (roomId) => {
@@ -543,7 +484,7 @@ function App() {
   }
 
   async function createRoom() {
-    if (!isSupabaseConfigured || !supabase || !isCloudReady || !authUserId) return
+    if (!isSupabaseConfigured || !supabase || !isAuthReady || !authUserId) return
 
     try {
       setIsCreatingRoom(true)
@@ -607,7 +548,7 @@ function App() {
   }
 
   async function joinRoom() {
-    if (!isSupabaseConfigured || !supabase || !isCloudReady || !authUserId) return
+    if (!isSupabaseConfigured || !supabase || !isAuthReady || !authUserId) return
 
     const normalizedCode = roomCodeInput.trim().toUpperCase()
 
@@ -718,14 +659,14 @@ function App() {
   }
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase || hasBootstrappedCloudRef.current) return
-    hasBootstrappedCloudRef.current = true
+    if (!isSupabaseConfigured || !supabase || hasBootstrappedAuthRef.current) return
+    hasBootstrappedAuthRef.current = true
 
     let isCancelled = false
 
-    async function initializeCloudSaves() {
+    async function initializeAuth() {
       try {
-        setCloudMessage('Connecting to Supabase...')
+        setRoomMessage('Connecting to Supabase...')
         const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
 
         if (sessionError) {
@@ -750,20 +691,16 @@ function App() {
         if (isCancelled) return
 
         setAuthUserId(user.id)
-        setCloudMessage('Connected. Loading saves...')
-        await fetchCloudSaves()
-        if (isCancelled) return
-
-        setIsCloudReady(true)
-        setCloudMessage('Cloud saves ready.')
+        setIsAuthReady(true)
+        setRoomMessage('Create a room, then join it from another device using the room code.')
       } catch (error) {
         if (isCancelled) return
         const details = error instanceof Error ? error.message : 'Unknown error'
-        setCloudMessage(`Cloud save setup failed: ${details}`)
+        setRoomMessage(`Multiplayer setup failed: ${details}`)
       }
     }
 
-    initializeCloudSaves()
+    initializeAuth()
 
     return () => {
       isCancelled = true
@@ -944,130 +881,11 @@ function App() {
     setRoomMessage('Room game reset.')
   }
 
-  async function saveToCloud() {
-    if (!isSupabaseConfigured || !supabase || !isCloudReady || !authUserId) return
-
-    if (inRoom) {
-      setCloudMessage('Leave the room first to use personal cloud saves.')
-      return
-    }
-
-    const cleanedName = saveName.trim()
-    if (!cleanedName) {
-      setCloudMessage('Enter a save name before saving.')
-      return
-    }
-
-    try {
-      setIsSaving(true)
-
-      const { error } = await supabase.from('game_saves').insert({
-        user_id: authUserId,
-        name: cleanedName,
-        game_state: readCurrentGameState(),
-      })
-
-      if (error) {
-        setCloudMessage(`Save failed: ${error.message}`)
-        return
-      }
-
-      await fetchCloudSaves()
-      setCloudMessage(`Saved "${cleanedName}" to cloud.`)
-    } catch (error) {
-      const details = error instanceof Error ? error.message : 'Unknown error'
-      setCloudMessage(`Save failed: ${details}`)
-    } finally {
-      setIsSaving(false)
-    }
-  }
-
-  async function loadSelectedSave() {
-    if (!isSupabaseConfigured || !supabase || !isCloudReady) return
-
-    if (inRoom) {
-      setCloudMessage('Leave the room first to load a personal cloud save.')
-      return
-    }
-
-    if (!selectedSaveId) {
-      setCloudMessage('Select a save to load.')
-      return
-    }
-
-    setIsLoadingSave(true)
-
-    const { data, error } = await supabase
-      .from('game_saves')
-      .select('id, name, game_state')
-      .eq('id', selectedSaveId)
-      .single()
-
-    setIsLoadingSave(false)
-
-    if (error) {
-      setCloudMessage(`Load failed: ${error.message}`)
-      return
-    }
-
-    try {
-      const nextState = normalizeLoadedState(data.game_state)
-      applyGameState(nextState)
-      setSaveName(data.name)
-      setCloudMessage(`Loaded "${data.name}".`)
-    } catch (validationError) {
-      const details =
-        validationError instanceof Error ? validationError.message : 'Invalid save format.'
-      setCloudMessage(`Load failed: ${details}`)
-    }
-  }
-
-  async function deleteSelectedSave() {
-    if (!isSupabaseConfigured || !supabase || !isCloudReady) return
-
-    if (inRoom) {
-      setCloudMessage('Leave the room first to delete personal cloud saves.')
-      return
-    }
-
-    if (!selectedSaveId) {
-      setCloudMessage('Select a save to delete.')
-      return
-    }
-
-    const saveToDelete = saves.find((save) => save.id === selectedSaveId)
-    const deleteName = saveToDelete?.name ?? 'selected save'
-
-    try {
-      setIsDeletingSave(true)
-
-      const { error } = await supabase
-        .from('game_saves')
-        .delete()
-        .eq('id', selectedSaveId)
-
-      if (error) {
-        setCloudMessage(`Delete failed: ${error.message}`)
-        return
-      }
-
-      await fetchCloudSaves()
-      setCloudMessage(`Deleted "${deleteName}".`)
-    } catch (error) {
-      const details = error instanceof Error ? error.message : 'Unknown error'
-      setCloudMessage(`Delete failed: ${details}`)
-    } finally {
-      setIsDeletingSave(false)
-    }
-  }
-
   const statusText = winner
     ? `Winner: Player ${winner}`
     : isDraw
       ? 'Draw'
       : `Turn: Player ${currentPlayer}`
-
-  const cloudDisabled = !isSupabaseConfigured || !isCloudReady || inRoom
 
   const roomPlayersSummary = roomPlayers
     .map((player) => {
@@ -1170,7 +988,7 @@ function App() {
                   type="button"
                   className="cloud-button"
                   onClick={createRoom}
-                  disabled={!isCloudReady || isCreatingRoom}
+                  disabled={!isAuthReady || isCreatingRoom}
                 >
                   {isCreatingRoom ? 'Creating...' : 'Create Room (Player X)'}
                 </button>
@@ -1185,85 +1003,19 @@ function App() {
                   onChange={(event) => setRoomCodeInput(event.target.value.toUpperCase())}
                   placeholder="ABC123"
                   maxLength={6}
-                  disabled={!isCloudReady}
+                  disabled={!isAuthReady}
                 />
 
                 <button
                   type="button"
                   className="cloud-button secondary"
                   onClick={joinRoom}
-                  disabled={!isCloudReady || isJoiningRoom}
+                  disabled={!isAuthReady || isJoiningRoom}
                 >
                   {isJoiningRoom ? 'Joining...' : 'Join Room'}
                 </button>
               </>
             )}
-          </div>
-
-          <div className="cloud-saves">
-            <h3>Cloud Saves</h3>
-            <p className="cloud-message">{cloudMessage}</p>
-
-            <label className="field-label" htmlFor="saveName">
-              Save Name
-            </label>
-            <input
-              id="saveName"
-              className="cloud-input"
-              value={saveName}
-              onChange={(event) => setSaveName(event.target.value)}
-              placeholder="Name this game state"
-              disabled={!isSupabaseConfigured || inRoom}
-            />
-
-            <button
-              type="button"
-              className="cloud-button"
-              onClick={saveToCloud}
-              disabled={cloudDisabled || isSaving}
-            >
-              {isSaving ? 'Saving...' : 'Save to Cloud'}
-            </button>
-
-            <label className="field-label" htmlFor="savedGames">
-              Saved Games
-            </label>
-            <select
-              id="savedGames"
-              className="cloud-select"
-              value={selectedSaveId}
-              onChange={(event) => setSelectedSaveId(event.target.value)}
-              disabled={cloudDisabled || saves.length === 0 || isFetchingSaves}
-            >
-              {saves.length === 0 ? (
-                <option value="">No saves yet</option>
-              ) : (
-                saves.map((save) => (
-                  <option key={save.id} value={save.id}>
-                    {save.label}
-                  </option>
-                ))
-              )}
-            </select>
-
-            <div className="cloud-actions">
-              <button
-                type="button"
-                className="cloud-button secondary"
-                onClick={loadSelectedSave}
-                disabled={cloudDisabled || !selectedSaveId || isLoadingSave}
-              >
-                {isLoadingSave ? 'Loading...' : 'Load'}
-              </button>
-              <button
-                type="button"
-                className="cloud-button danger"
-                onClick={deleteSelectedSave}
-                disabled={cloudDisabled || !selectedSaveId || isDeletingSave}
-              >
-                {isDeletingSave ? 'Deleting...' : 'Delete'}
-              </button>
-            </div>
           </div>
         </aside>
 

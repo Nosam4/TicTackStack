@@ -214,20 +214,6 @@
   color: var(--ink);
 }
 
-.cloud-saves {
-  margin-top: 1rem;
-  border-top: 1px solid var(--line-soft);
-  padding-top: 1rem;
-  text-align: left;
-}
-
-.cloud-saves h3 {
-  margin: 0;
-  font-size: 0.92rem;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
 .cloud-message {
   margin-top: 0.45rem;
   font-size: 0.84rem;
@@ -244,8 +230,7 @@
   color: var(--ink-soft);
 }
 
-.cloud-input,
-.cloud-select {
+.cloud-input {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 0.55rem;
@@ -255,8 +240,7 @@
   font-family: var(--body);
 }
 
-.cloud-input:focus-visible,
-.cloud-select:focus-visible {
+.cloud-input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -276,15 +260,6 @@
 .cloud-button:disabled {
   opacity: 0.65;
   cursor: not-allowed;
-}
-
-.cloud-actions {
-  display: flex;
-  gap: 0.45rem;
-}
-
-.cloud-actions .cloud-button {
-  flex: 1;
 }
 
 .cloud-button.secondary {

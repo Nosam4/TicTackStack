@@ -1,16 +1,60 @@
-# React + Vite
+# Tic-Tac-Stack
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Stack-based tic-tac-toe built with React + Vite.
 
-Currently, two official plugins are available:
+Rules summary:
+- You can only place new pieces, never move placed pieces.
+- You can place on empty squares or on smaller top pieces.
+- You cannot place on same-size or larger top pieces.
+- Win detection only reads the top visible piece on each square.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Local development
 
-## React Compiler
+```bash
+npm install
+npm run dev
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## GitHub Pages
 
-## Expanding the ESLint configuration
+This repo deploys with GitHub Actions using:
+- [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml)
+- `base: '/TicTackStack/'` in [`vite.config.js`](./vite.config.js)
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Supabase setup (cloud saves)
+
+### 1. Create project + enable anonymous auth
+- Create a Supabase project.
+- In Auth settings, enable Anonymous Sign-ins.
+
+### 2. Create database table and policies
+- Open the Supabase SQL Editor.
+- Run [`supabase/schema.sql`](./supabase/schema.sql).
+
+### 3. Configure local environment
+- Copy `.env.example` to `.env`.
+- Fill in your values:
+
+```bash
+VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_ANON_KEY
+```
+
+### 4. Configure GitHub Actions secrets for Pages deploy
+Because Vite injects env vars at build time, set these repo secrets:
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+Path in GitHub:
+- `Settings -> Secrets and variables -> Actions -> New repository secret`
+
+After setting secrets, push a commit or re-run the deploy workflow.
+
+## Available scripts
+
+```bash
+npm run dev
+npm run build
+npm run lint
+npm run preview
+```

@@ -175,6 +175,87 @@
   cursor: pointer;
 }
 
+.cloud-saves {
+  margin-top: 1rem;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 1rem;
+  text-align: left;
+}
+
+.cloud-saves h3 {
+  margin: 0;
+  font-size: 0.92rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.cloud-message {
+  margin-top: 0.45rem;
+  font-size: 0.84rem;
+  min-height: 2.6em;
+}
+
+.field-label {
+  display: block;
+  margin-top: 0.62rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.cloud-input,
+.cloud-select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  padding: 0.45rem 0.6rem;
+  background: #fffaf2;
+  color: var(--ink);
+  font-family: var(--body);
+}
+
+.cloud-input:focus-visible,
+.cloud-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cloud-button {
+  margin-top: 0.6rem;
+  border: none;
+  border-radius: 0.55rem;
+  padding: 0.5rem 0.72rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  background: var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.cloud-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.cloud-actions {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.cloud-actions .cloud-button {
+  flex: 1;
+}
+
+.cloud-button.secondary {
+  background: #2e6791;
+}
+
+.cloud-button.danger {
+  background: #9b3030;
+}
+
 .board {
   display: grid;
   grid-template-columns: repeat(3, minmax(84px, 1fr));

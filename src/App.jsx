@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
 
@@ -10,6 +10,8 @@ const pieceRank = {
 
 const sizeOrder = ['small', 'medium', 'large']
 const defaultGameMessage = 'Choose a size, then place it on the board.'
+const roomCodePattern = /^[A-Z0-9]{6}$/
+const roomCodeAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
 function createInitialBoard() {
   return Array.from({ length: 9 }, () => [])
@@ -176,6 +178,124 @@ function buildSaveOptions(saves) {
   })
 }
 
+function buildRoomCode() {
+  let code = ''
+  for (let index = 0; index < 6; index += 1) {
+    const randomIndex = Math.floor(Math.random() * roomCodeAlphabet.length)
+    code += roomCodeAlphabet[randomIndex]
+  }
+  return code
+}
+
+function computeNextGameState(currentState, squareIndex) {
+  const {
+    board,
+    pieces,
+    currentPlayer,
+    selectedSize,
+    winner,
+    isDraw,
+  } = currentState
+
+  if (winner || isDraw) {
+    return { error: 'The game is already finished.' }
+  }
+
+  const currentAvailableSize = getFirstAvailableSize(pieces, currentPlayer)
+
+  if (!currentAvailableSize) {
+    return { error: `Player ${currentPlayer} has no pieces left.` }
+  }
+
+  const sizeToPlay =
+    pieces[currentPlayer][selectedSize] > 0 ? selectedSize : currentAvailableSize
+
+  if (!canPlacePiece(board, squareIndex, sizeToPlay)) {
+    return {
+      error:
+        'Invalid placement: your new piece must be larger than the top piece on that square.',
+    }
+  }
+
+  const nextBoard = placePiece(board, squareIndex, currentPlayer, sizeToPlay)
+  const nextPieces = {
+    ...pieces,
+    [currentPlayer]: {
+      ...pieces[currentPlayer],
+      [sizeToPlay]: pieces[currentPlayer][sizeToPlay] - 1,
+    },
+  }
+
+  const foundWinner = checkWinner(nextBoard)
+  if (foundWinner) {
+    return {
+      nextState: {
+        board: nextBoard,
+        pieces: nextPieces,
+        currentPlayer,
+        selectedSize: sizeToPlay,
+        winner: foundWinner,
+        isDraw: false,
+        message: `Player ${foundWinner} wins!`,
+      },
+    }
+  }
+
+  const otherPlayer = currentPlayer === 'X' ? 'O' : 'X'
+  const otherPlayerHasMove = hasAnyLegalMove(nextBoard, nextPieces, otherPlayer)
+  const currentPlayerHasMove = hasAnyLegalMove(nextBoard, nextPieces, currentPlayer)
+
+  if (!otherPlayerHasMove && !currentPlayerHasMove) {
+    return {
+      nextState: {
+        board: nextBoard,
+        pieces: nextPieces,
+        currentPlayer,
+        selectedSize: sizeToPlay,
+        winner: null,
+        isDraw: true,
+        message: 'No legal moves left for either player. Draw.',
+      },
+    }
+  }
+
+  if (!otherPlayerHasMove && currentPlayerHasMove) {
+    const fallbackSize =
+      nextPieces[currentPlayer][sizeToPlay] > 0
+        ? sizeToPlay
+        : getFirstAvailableSize(nextPieces, currentPlayer)
+
+    return {
+      nextState: {
+        board: nextBoard,
+        pieces: nextPieces,
+        currentPlayer,
+        selectedSize: fallbackSize ?? sizeToPlay,
+        winner: null,
+        isDraw: false,
+        message: `Player ${otherPlayer} has no legal move. Player ${currentPlayer} goes again.`,
+      },
+    }
+  }
+
+  const fallbackSize =
+    nextPieces[otherPlayer][sizeToPlay] > 0
+      ? sizeToPlay
+      : getFirstAvailableSize(nextPieces, otherPlayer)
+
+  return {
+    nextState: {
+      board: nextBoard,
+      pieces: nextPieces,
+      currentPlayer: otherPlayer,
+      selectedSize: fallbackSize ?? sizeToPlay,
+      winner: null,
+      isDraw: false,
+      message: `Player ${otherPlayer}'s turn.`,
+    },
+  }
+}
+
 function App() {
   const [board, setBoard] = useState(() => createInitialBoard())
   const [pieces, setPieces] = useState(() => createInitialPieces())
@@ -200,7 +320,22 @@ function App() {
   const [isDeletingSave, setIsDeletingSave] = useState(false)
   const [isFetchingSaves, setIsFetchingSaves] = useState(false)
 
+  const [roomCodeInput, setRoomCodeInput] = useState('')
+  const [activeRoomId, setActiveRoomId] = useState(null)
+  const [activeRoomCode, setActiveRoomCode] = useState('')
+  const [playerSymbol, setPlayerSymbol] = useState(null)
+  const [roomStatus, setRoomStatus] = useState('idle')
+  const [roomPlayers, setRoomPlayers] = useState([])
+  const [roomUpdatedAt, setRoomUpdatedAt] = useState(null)
+  const [roomMessage, setRoomMessage] = useState(
+    'Create a room, then join it from another device using the room code.',
+  )
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false)
+  const [isJoiningRoom, setIsJoiningRoom] = useState(false)
+  const [isLeavingRoom, setIsLeavingRoom] = useState(false)
+
   const hasBootstrappedCloudRef = useRef(false)
+  const roomChannelRef = useRef(null)
 
   const currentAvailableSize = useMemo(
     () => getFirstAvailableSize(pieces, currentPlayer),
@@ -210,7 +345,11 @@ function App() {
   const previewSize =
     pieces[currentPlayer][selectedSize] > 0 ? selectedSize : currentAvailableSize
 
-  function applyGameState(nextState) {
+  const inRoom = Boolean(activeRoomId)
+  const waitingForOpponent = inRoom && roomPlayers.length < 2
+  const isPlayersTurn = !inRoom || (playerSymbol && playerSymbol === currentPlayer)
+
+  const applyGameState = useCallback((nextState) => {
     setBoard(nextState.board)
     setPieces(nextState.pieces)
     setCurrentPlayer(nextState.currentPlayer)
@@ -218,7 +357,7 @@ function App() {
     setWinner(nextState.winner)
     setIsDraw(nextState.isDraw)
     setMessage(nextState.message)
-  }
+  }, [])
 
   function readCurrentGameState() {
     return {
@@ -264,6 +403,318 @@ function App() {
     })
 
     return normalized
+  }
+
+  const fetchRoomPlayers = useCallback(async (roomId) => {
+    if (!isSupabaseConfigured || !supabase || !roomId) return []
+
+    const { data, error } = await supabase
+      .from('room_players')
+      .select('room_id, user_id, symbol, joined_at')
+      .eq('room_id', roomId)
+      .order('joined_at', { ascending: true })
+
+    if (error) {
+      throw error
+    }
+
+    const playersList = data ?? []
+    setRoomPlayers(playersList)
+    return playersList
+  }, [])
+
+  const applyRoomRow = useCallback(
+    (roomRow) => {
+      if (!roomRow) return
+
+      if (roomRow.updated_at) {
+        setRoomUpdatedAt(roomRow.updated_at)
+      }
+
+      if (typeof roomRow.status === 'string') {
+        setRoomStatus(roomRow.status)
+      }
+
+      if (typeof roomRow.room_code === 'string') {
+        setActiveRoomCode(roomRow.room_code)
+      }
+
+      try {
+        const parsedState = normalizeLoadedState(roomRow.game_state)
+        applyGameState(parsedState)
+      } catch (error) {
+        const details = error instanceof Error ? error.message : 'Invalid room state.'
+        setRoomMessage(`Room sync failed: ${details}`)
+      }
+    },
+    [applyGameState],
+  )
+
+  const syncRoomFromServer = useCallback(
+    async (roomId) => {
+      if (!isSupabaseConfigured || !supabase || !roomId) return
+
+      const { data, error } = await supabase
+        .from('game_rooms')
+        .select('id, room_code, game_state, status, updated_at')
+        .eq('id', roomId)
+        .limit(1)
+
+      if (error) {
+        throw error
+      }
+
+      const roomRow = data?.[0]
+      if (!roomRow) {
+        throw new Error('Room no longer exists or is inaccessible.')
+      }
+
+      applyRoomRow(roomRow)
+      await fetchRoomPlayers(roomId)
+    },
+    [applyRoomRow, fetchRoomPlayers],
+  )
+
+  async function updateRoomStatusIfNeeded(roomId, playerCount, status) {
+    if (!isSupabaseConfigured || !supabase || !roomId) return
+
+    if (status === 'finished') return
+
+    const desiredStatus = playerCount >= 2 ? 'active' : 'waiting'
+
+    if (status === desiredStatus) return
+
+    await supabase
+      .from('game_rooms')
+      .update({ status: desiredStatus })
+      .eq('id', roomId)
+  }
+
+  function leaveRoomLocal() {
+    setActiveRoomId(null)
+    setActiveRoomCode('')
+    setPlayerSymbol(null)
+    setRoomStatus('idle')
+    setRoomPlayers([])
+    setRoomUpdatedAt(null)
+    setRoomMessage('Create a room, then join it from another device using the room code.')
+  }
+
+  async function leaveRoom() {
+    if (!isSupabaseConfigured || !supabase || !inRoom || !authUserId) {
+      leaveRoomLocal()
+      applyGameState(createInitialGameState())
+      return
+    }
+
+    const roomId = activeRoomId
+
+    try {
+      setIsLeavingRoom(true)
+
+      await supabase
+        .from('room_players')
+        .delete()
+        .eq('room_id', roomId)
+        .eq('user_id', authUserId)
+
+      const { data: playersAfter } = await supabase
+        .from('room_players')
+        .select('room_id, user_id, symbol')
+        .eq('room_id', roomId)
+
+      const remaining = playersAfter?.length ?? 0
+
+      if (remaining === 0) {
+        await supabase.from('game_rooms').delete().eq('id', roomId)
+      } else {
+        await updateRoomStatusIfNeeded(roomId, remaining, roomStatus)
+      }
+
+      leaveRoomLocal()
+      applyGameState(createInitialGameState())
+      setMessage(defaultGameMessage)
+    } catch (error) {
+      const details = error instanceof Error ? error.message : 'Unknown error'
+      setRoomMessage(`Leave room failed: ${details}`)
+    } finally {
+      setIsLeavingRoom(false)
+    }
+  }
+
+  async function createRoom() {
+    if (!isSupabaseConfigured || !supabase || !isCloudReady || !authUserId) return
+
+    try {
+      setIsCreatingRoom(true)
+
+      let roomRow = null
+      let insertError = null
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const roomCode = buildRoomCode()
+        const { data, error } = await supabase
+          .from('game_rooms')
+          .insert({
+            room_code: roomCode,
+            host_user_id: authUserId,
+            game_state: createInitialGameState(),
+            status: 'waiting',
+          })
+          .select('id, room_code, game_state, status, updated_at')
+          .single()
+
+        if (!error) {
+          roomRow = data
+          break
+        }
+
+        insertError = error
+
+        if (error.code !== '23505') {
+          break
+        }
+      }
+
+      if (!roomRow) {
+        throw insertError ?? new Error('Could not create room.')
+      }
+
+      const { error: playerError } = await supabase.from('room_players').insert({
+        room_id: roomRow.id,
+        user_id: authUserId,
+        symbol: 'X',
+      })
+
+      if (playerError) {
+        throw playerError
+      }
+
+      setActiveRoomId(roomRow.id)
+      setActiveRoomCode(roomRow.room_code)
+      setPlayerSymbol('X')
+      setRoomStatus(roomRow.status)
+      setRoomUpdatedAt(roomRow.updated_at)
+      applyRoomRow(roomRow)
+      await fetchRoomPlayers(roomRow.id)
+      setRoomMessage(`Room ${roomRow.room_code} created. Share this code with Player O.`)
+    } catch (error) {
+      const details = error instanceof Error ? error.message : 'Unknown error'
+      setRoomMessage(`Create room failed: ${details}`)
+    } finally {
+      setIsCreatingRoom(false)
+    }
+  }
+
+  async function joinRoom() {
+    if (!isSupabaseConfigured || !supabase || !isCloudReady || !authUserId) return
+
+    const normalizedCode = roomCodeInput.trim().toUpperCase()
+
+    if (!roomCodePattern.test(normalizedCode)) {
+      setRoomMessage('Enter a valid 6-character room code.')
+      return
+    }
+
+    try {
+      setIsJoiningRoom(true)
+
+      const { data: roomRows, error: roomError } = await supabase
+        .from('game_rooms')
+        .select('id, room_code, game_state, status, updated_at')
+        .eq('room_code', normalizedCode)
+        .limit(1)
+
+      if (roomError) {
+        throw roomError
+      }
+
+      const roomRow = roomRows?.[0]
+
+      if (!roomRow) {
+        setRoomMessage('Room not found.')
+        return
+      }
+
+      let playersList = await fetchRoomPlayers(roomRow.id)
+
+      const existingPlayer = playersList.find((player) => player.user_id === authUserId)
+
+      let symbolToUse = existingPlayer?.symbol ?? null
+
+      if (!symbolToUse) {
+        if (playersList.length >= 2) {
+          setRoomMessage('This room already has two players.')
+          return
+        }
+
+        const usedSymbols = new Set(playersList.map((player) => player.symbol))
+        symbolToUse = usedSymbols.has('X') ? 'O' : 'X'
+
+        const { error: joinError } = await supabase.from('room_players').insert({
+          room_id: roomRow.id,
+          user_id: authUserId,
+          symbol: symbolToUse,
+        })
+
+        if (joinError) {
+          throw joinError
+        }
+
+        playersList = await fetchRoomPlayers(roomRow.id)
+      }
+
+      await updateRoomStatusIfNeeded(roomRow.id, playersList.length, roomRow.status)
+
+      setActiveRoomId(roomRow.id)
+      setActiveRoomCode(roomRow.room_code)
+      setPlayerSymbol(symbolToUse)
+      applyRoomRow(roomRow)
+      await syncRoomFromServer(roomRow.id)
+
+      setRoomMessage(`Joined room ${roomRow.room_code} as Player ${symbolToUse}.`)
+      setRoomCodeInput('')
+    } catch (error) {
+      const details = error instanceof Error ? error.message : 'Unknown error'
+      setRoomMessage(`Join failed: ${details}`)
+    } finally {
+      setIsJoiningRoom(false)
+    }
+  }
+
+  async function pushRoomState(nextState, nextStatus) {
+    if (!isSupabaseConfigured || !supabase || !activeRoomId) {
+      return { ok: false, error: 'Room is not connected.' }
+    }
+
+    const updatePayload = {
+      game_state: nextState,
+      status: nextStatus,
+    }
+
+    let query = supabase
+      .from('game_rooms')
+      .update(updatePayload)
+      .eq('id', activeRoomId)
+      .select('id, room_code, game_state, status, updated_at')
+      .single()
+
+    if (roomUpdatedAt) {
+      query = query.eq('updated_at', roomUpdatedAt)
+    }
+
+    const { data, error } = await query
+
+    if (error) {
+      return { ok: false, error: error.message }
+    }
+
+    if (!data) {
+      return { ok: false, error: 'Room update conflict. Please try again.' }
+    }
+
+    applyRoomRow(data)
+    return { ok: true }
   }
 
   useEffect(() => {
@@ -319,95 +770,187 @@ function App() {
     }
   }, [])
 
-  function resetGame() {
-    applyGameState(createInitialGameState())
-  }
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase || !activeRoomId) return
+
+    let isCancelled = false
+
+    async function connectRoomRealtime() {
+      try {
+        await syncRoomFromServer(activeRoomId)
+        if (isCancelled) return
+
+        if (roomChannelRef.current) {
+          await supabase.removeChannel(roomChannelRef.current)
+          roomChannelRef.current = null
+        }
+
+        const channel = supabase
+          .channel(`room-${activeRoomId}`)
+          .on(
+            'postgres_changes',
+            {
+              event: 'UPDATE',
+              schema: 'public',
+              table: 'game_rooms',
+              filter: `id=eq.${activeRoomId}`,
+            },
+            async (payload) => {
+              if (isCancelled) return
+              const roomRow = payload.new
+              applyRoomRow(roomRow)
+              await fetchRoomPlayers(activeRoomId)
+            },
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'room_players',
+              filter: `room_id=eq.${activeRoomId}`,
+            },
+            async () => {
+              if (isCancelled) return
+              const latestPlayers = await fetchRoomPlayers(activeRoomId)
+              setRoomStatus((currentStatus) => {
+                if (currentStatus === 'finished') return currentStatus
+                return latestPlayers.length >= 2 ? 'active' : 'waiting'
+              })
+            },
+          )
+
+        channel.subscribe((status) => {
+          if (isCancelled) return
+
+          if (status === 'SUBSCRIBED') {
+            setRoomMessage((currentMessage) => {
+              if (currentMessage.startsWith('Create a room')) {
+                return 'Room connected.'
+              }
+              return currentMessage
+            })
+          }
+
+          if (status === 'CHANNEL_ERROR') {
+            setRoomMessage('Room realtime channel error. Refreshing room state...')
+            syncRoomFromServer(activeRoomId).catch(() => {
+              setRoomMessage('Room sync failed after channel error.')
+            })
+          }
+        })
+
+        roomChannelRef.current = channel
+      } catch (error) {
+        if (isCancelled) return
+        const details = error instanceof Error ? error.message : 'Unknown error'
+        setRoomMessage(`Room connection failed: ${details}`)
+      }
+    }
+
+    connectRoomRealtime()
+
+    return () => {
+      isCancelled = true
+      if (roomChannelRef.current) {
+        supabase.removeChannel(roomChannelRef.current)
+        roomChannelRef.current = null
+      }
+    }
+  }, [activeRoomId, applyRoomRow, fetchRoomPlayers, syncRoomFromServer])
 
   function handleSelectSize(size) {
     if (winner || isDraw) return
+
+    if (inRoom && !isPlayersTurn) {
+      setRoomMessage(`It is Player ${currentPlayer}'s turn.`)
+      return
+    }
+
     if (pieces[currentPlayer][size] <= 0) {
       setMessage(`Player ${currentPlayer} is out of ${size} pieces.`)
       return
     }
+
     setSelectedSize(size)
   }
 
-  function handleSquareClick(squareIndex) {
+  async function handleSquareClick(squareIndex) {
     if (winner || isDraw) return
 
-    if (!currentAvailableSize) {
-      setMessage(`Player ${currentPlayer} has no pieces left.`)
-      return
-    }
-
-    const sizeToPlay =
-      pieces[currentPlayer][selectedSize] > 0 ? selectedSize : currentAvailableSize
-
-    if (!canPlacePiece(board, squareIndex, sizeToPlay)) {
-      setMessage(
-        'Invalid placement: your new piece must be larger than the top piece on that square.',
-      )
-      return
-    }
-
-    const nextBoard = placePiece(board, squareIndex, currentPlayer, sizeToPlay)
-    const nextPieces = {
-      ...pieces,
-      [currentPlayer]: {
-        ...pieces[currentPlayer],
-        [sizeToPlay]: pieces[currentPlayer][sizeToPlay] - 1,
-      },
-    }
-
-    setBoard(nextBoard)
-    setPieces(nextPieces)
-
-    const foundWinner = checkWinner(nextBoard)
-    if (foundWinner) {
-      setWinner(foundWinner)
-      setMessage(`Player ${foundWinner} wins!`)
-      return
-    }
-
-    const otherPlayer = currentPlayer === 'X' ? 'O' : 'X'
-    const otherPlayerHasMove = hasAnyLegalMove(nextBoard, nextPieces, otherPlayer)
-    const currentPlayerHasMove = hasAnyLegalMove(nextBoard, nextPieces, currentPlayer)
-
-    if (!otherPlayerHasMove && !currentPlayerHasMove) {
-      setIsDraw(true)
-      setMessage('No legal moves left for either player. Draw.')
-      return
-    }
-
-    if (!otherPlayerHasMove && currentPlayerHasMove) {
-      const nextSelectedSize =
-        nextPieces[currentPlayer][selectedSize] > 0
-          ? selectedSize
-          : getFirstAvailableSize(nextPieces, currentPlayer)
-
-      if (nextSelectedSize) {
-        setSelectedSize(nextSelectedSize)
+    if (inRoom) {
+      if (!playerSymbol) {
+        setRoomMessage('Room role is not ready yet.')
+        return
       }
-      setMessage(`Player ${otherPlayer} has no legal move. Player ${currentPlayer} goes again.`)
+
+      if (waitingForOpponent) {
+        setRoomMessage('Waiting for another player to join the room.')
+        return
+      }
+
+      if (!isPlayersTurn) {
+        setRoomMessage(`It is Player ${currentPlayer}'s turn.`)
+        return
+      }
+    }
+
+    const computed = computeNextGameState(readCurrentGameState(), squareIndex)
+
+    if (computed.error) {
+      setMessage(computed.error)
       return
     }
 
-    setCurrentPlayer(otherPlayer)
+    const nextState = computed.nextState
 
-    const nextSelectedSize =
-      nextPieces[otherPlayer][selectedSize] > 0
-        ? selectedSize
-        : getFirstAvailableSize(nextPieces, otherPlayer)
-
-    if (nextSelectedSize) {
-      setSelectedSize(nextSelectedSize)
+    if (!inRoom) {
+      applyGameState(nextState)
+      return
     }
 
-    setMessage(`Player ${otherPlayer}'s turn.`)
+    const nextStatus = nextState.winner || nextState.isDraw ? 'finished' : 'active'
+    const updateResult = await pushRoomState(nextState, nextStatus)
+
+    if (!updateResult.ok) {
+      setRoomMessage(`Move failed: ${updateResult.error}`)
+      await syncRoomFromServer(activeRoomId)
+      return
+    }
+
+    setRoomMessage(`Move played as Player ${playerSymbol}.`)
+  }
+
+  async function handleResetGame() {
+    if (!inRoom) {
+      applyGameState(createInitialGameState())
+      return
+    }
+
+    if (playerSymbol !== 'X') {
+      setRoomMessage('Only Player X can reset the room game.')
+      return
+    }
+
+    const resetState = createInitialGameState()
+    const nextStatus = roomPlayers.length >= 2 ? 'active' : 'waiting'
+
+    const updateResult = await pushRoomState(resetState, nextStatus)
+    if (!updateResult.ok) {
+      setRoomMessage(`Reset failed: ${updateResult.error}`)
+      return
+    }
+
+    setRoomMessage('Room game reset.')
   }
 
   async function saveToCloud() {
     if (!isSupabaseConfigured || !supabase || !isCloudReady || !authUserId) return
+
+    if (inRoom) {
+      setCloudMessage('Leave the room first to use personal cloud saves.')
+      return
+    }
 
     const cleanedName = saveName.trim()
     if (!cleanedName) {
@@ -441,6 +984,11 @@ function App() {
 
   async function loadSelectedSave() {
     if (!isSupabaseConfigured || !supabase || !isCloudReady) return
+
+    if (inRoom) {
+      setCloudMessage('Leave the room first to load a personal cloud save.')
+      return
+    }
 
     if (!selectedSaveId) {
       setCloudMessage('Select a save to load.')
@@ -476,6 +1024,11 @@ function App() {
 
   async function deleteSelectedSave() {
     if (!isSupabaseConfigured || !supabase || !isCloudReady) return
+
+    if (inRoom) {
+      setCloudMessage('Leave the room first to delete personal cloud saves.')
+      return
+    }
 
     if (!selectedSaveId) {
       setCloudMessage('Select a save to delete.')
@@ -514,7 +1067,14 @@ function App() {
       ? 'Draw'
       : `Turn: Player ${currentPlayer}`
 
-  const cloudDisabled = !isSupabaseConfigured || !isCloudReady
+  const cloudDisabled = !isSupabaseConfigured || !isCloudReady || inRoom
+
+  const roomPlayersSummary = roomPlayers
+    .map((player) => {
+      const selfTag = player.user_id === authUserId ? ' (you)' : ''
+      return `${player.symbol}${selfTag}`
+    })
+    .join(' vs ')
 
   return (
     <main className="app-shell">
@@ -557,7 +1117,7 @@ function App() {
                     type="button"
                     className={`size-button ${size} ${selected ? 'selected' : ''}`}
                     onClick={() => handleSelectSize(size)}
-                    disabled={winner || isDraw}
+                    disabled={winner || isDraw || (inRoom && !isPlayersTurn)}
                   >
                     <span>{size}</span>
                     <span className="remaining">{remaining}</span>
@@ -568,9 +1128,77 @@ function App() {
             </div>
           </div>
 
-          <button type="button" className="reset" onClick={resetGame}>
-            Reset Game
+          <button type="button" className="reset" onClick={handleResetGame}>
+            {inRoom ? 'Reset Room Game' : 'Reset Game'}
           </button>
+
+          <div className="room-panel">
+            <h3>Multiplayer Room</h3>
+            <p className="cloud-message">{roomMessage}</p>
+
+            {inRoom ? (
+              <>
+                <div className="room-meta">
+                  <span>Room Code</span>
+                  <code>{activeRoomCode}</code>
+                </div>
+                <div className="room-meta">
+                  <span>Your Role</span>
+                  <code>{playerSymbol ?? '—'}</code>
+                </div>
+                <div className="room-meta">
+                  <span>Room Status</span>
+                  <code>{roomStatus}</code>
+                </div>
+                <div className="room-meta">
+                  <span>Players</span>
+                  <code>{roomPlayersSummary || 'Waiting...'}</code>
+                </div>
+
+                <button
+                  type="button"
+                  className="cloud-button danger"
+                  onClick={leaveRoom}
+                  disabled={isLeavingRoom}
+                >
+                  {isLeavingRoom ? 'Leaving...' : 'Leave Room'}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="cloud-button"
+                  onClick={createRoom}
+                  disabled={!isCloudReady || isCreatingRoom}
+                >
+                  {isCreatingRoom ? 'Creating...' : 'Create Room (Player X)'}
+                </button>
+
+                <label className="field-label" htmlFor="roomCodeInput">
+                  Join Room Code
+                </label>
+                <input
+                  id="roomCodeInput"
+                  className="cloud-input"
+                  value={roomCodeInput}
+                  onChange={(event) => setRoomCodeInput(event.target.value.toUpperCase())}
+                  placeholder="ABC123"
+                  maxLength={6}
+                  disabled={!isCloudReady}
+                />
+
+                <button
+                  type="button"
+                  className="cloud-button secondary"
+                  onClick={joinRoom}
+                  disabled={!isCloudReady || isJoiningRoom}
+                >
+                  {isJoiningRoom ? 'Joining...' : 'Join Room'}
+                </button>
+              </>
+            )}
+          </div>
 
           <div className="cloud-saves">
             <h3>Cloud Saves</h3>
@@ -585,7 +1213,7 @@ function App() {
               value={saveName}
               onChange={(event) => setSaveName(event.target.value)}
               placeholder="Name this game state"
-              disabled={!isSupabaseConfigured}
+              disabled={!isSupabaseConfigured || inRoom}
             />
 
             <button
@@ -646,7 +1274,8 @@ function App() {
               !winner &&
               !isDraw &&
               previewSize &&
-              canPlacePiece(board, index, previewSize)
+              canPlacePiece(board, index, previewSize) &&
+              (!inRoom || (isPlayersTurn && !waitingForOpponent))
 
             return (
               <button
@@ -655,6 +1284,7 @@ function App() {
                 className={`square ${playable ? 'playable' : ''}`}
                 onClick={() => handleSquareClick(index)}
                 aria-label={`Square ${index + 1}`}
+                disabled={!playable}
               >
                 {topPiece ? (
                   <div className={`piece ${topPiece.player.toLowerCase()} ${topPiece.size}`}>

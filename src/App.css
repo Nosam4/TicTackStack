@@ -175,6 +175,45 @@
   cursor: pointer;
 }
 
+.room-panel {
+  margin-top: 1rem;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 1rem;
+  text-align: left;
+}
+
+.room-panel h3 {
+  margin: 0;
+  font-size: 0.92rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.room-meta {
+  margin-top: 0.45rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.55rem;
+  border: 1px solid var(--line-soft);
+  background: var(--card-bg);
+}
+
+.room-meta span {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.room-meta code {
+  font-family: var(--mono);
+  font-size: 0.79rem;
+  color: var(--ink);
+}
+
 .cloud-saves {
   margin-top: 1rem;
   border-top: 1px solid var(--line-soft);
